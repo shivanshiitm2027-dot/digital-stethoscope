@@ -340,3 +340,137 @@ st.caption(
     "Filtering can remove useful sound as well as noise. "
     "This lab processes audio; it does not diagnose conditions."
 )
+
+# ---------- Engineering analysis ----------
+import json
+from scipy.signal import sosfreqz
+
+st.divider()
+st.header("📊 Engineering Analysis")
+
+# Use Advanced Audio Lab settings if that section exists.
+analysis_input = np.asarray(
+    globals().get("lab_signal", raw),
+    dtype=np.float64,
+)
+analysis_output = np.asarray(
+    globals().get("lab_output", output),
+    dtype=np.float64,
+)
+analysis_fs = int(globals().get("lab_fs", fs))
+analysis_sos = globals().get("lab_sos", sos)
+
+def rms_level(signal):
+    return float(np.sqrt(np.mean(signal ** 2)))
+
+input_rms = rms_level(analysis_input)
+output_rms = rms_level(analysis_output)
+
+def dbfs(value):
+    if value <= 0:
+        return "−∞ dBFS"
+    return f"{20 * np.log10(value):.1f} dBFS"
+
+clipped_percent = float(
+    100 * np.mean(np.abs(analysis_output) > 1)
+)
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Input RMS", dbfs(input_rms))
+col2.metric("Output RMS", dbfs(output_rms))
+col3.metric("Samples exceeding ±1", f"{clipped_percent:.2f}%")
+
+st.caption(
+    "RMS shows signal level, not signal quality. "
+    "A lower output level alone does not prove noise removal."
+)
+
+if clipped_percent > 0:
+    st.warning("Output will clip during WAV export. Reduce output gain.")
+else:
+    st.success("Output is within the digital WAV amplitude range.")
+
+st.subheader("Filter Frequency Response")
+
+frequencies, response = sosfreqz(
+    analysis_sos,
+    worN=4096,
+    fs=analysis_fs,
+)
+response_db = 20 * np.log10(
+    np.maximum(np.abs(response), 1e-8)
+)
+
+st.line_chart(
+    {
+        "Frequency (Hz)": frequencies,
+        "Filter magnitude (dB)": response_db,
+    },
+    x="Frequency (Hz)",
+    y="Filter magnitude (dB)",
+)
+
+st.caption(
+    "This graph shows the filter response before output gain. "
+    "0 dB means approximately unchanged amplitude."
+)
+
+st.subheader("Export Results")
+
+report = {
+    "project": "Digital Stethoscope DSP Simulation",
+    "author": "Shivanshu Yadav",
+    "sample_rate_hz": analysis_fs,
+    "samples": int(len(analysis_input)),
+    "duration_seconds": len(analysis_input) / analysis_fs,
+    "input_rms": input_rms,
+    "output_rms": output_rms,
+    "output_peak": float(np.max(np.abs(analysis_output))),
+    "samples_exceeding_full_scale_percent": clipped_percent,
+    "source": (
+        "Uploaded WAV"
+        if globals().get("uploaded") is not None
+        else "Synthetic simulation"
+    ),
+    "note": "Engineering measurements; no diagnostic conclusions.",
+}
+
+# Bound CSV size while keeping both signals aligned.
+export_count = min(len(analysis_input), analysis_fs * 5)
+export_data = np.column_stack((
+    np.arange(export_count) / analysis_fs,
+    analysis_input[:export_count],
+    analysis_output[:export_count],
+))
+
+csv_buffer = io.StringIO()
+np.savetxt(
+    csv_buffer,
+    export_data,
+    delimiter=",",
+    header="time_seconds,input_amplitude,output_amplitude",
+    comments="",
+    fmt="%.8f",
+)
+
+download1, download2 = st.columns(2)
+
+with download1:
+    st.download_button(
+        "Download Analysis Report",
+        data=json.dumps(report, indent=2),
+        file_name="stethoscope_analysis.json",
+        mime="application/json",
+        key="analysis_report_download",
+    )
+
+with download2:
+    st.download_button(
+        "Download Waveform CSV",
+        data=csv_buffer.getvalue(),
+        file_name="stethoscope_waveforms.csv",
+        mime="text/csv",
+        key="waveform_csv_download",
+    )
+
+st.caption("CSV contains up to the first 5 seconds of input and output.")
